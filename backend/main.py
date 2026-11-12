@@ -1,11 +1,14 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from scheduler import start_scheduler
 
 import models
 import schemas
 import medication_models
 import schedule_models
+import medication_dose_models
 
 
 from database import engine, Base, SessionLocal
@@ -178,3 +181,150 @@ def get_medication_schedules(
         }
         for schedule in schedules
     ]
+
+@app.get("/medication-doses")
+def get_medication_doses(
+    status: str = "pending",
+    db: Session = Depends(get_db)
+):
+    doses = db.query(
+        medication_dose_models.MedicationDose
+    ).filter(
+        medication_dose_models.MedicationDose.status == status
+    ).all()
+
+    return [
+        {
+            "dose_id": dose.id,
+            "schedule_id": dose.schedule_id,
+            "scheduled_for": dose.scheduled_for,
+            "status": dose.status
+        }
+        for dose in doses
+    ]
+
+@app.post("/medication-doses/{dose_id}/taken")
+def mark_dose_taken(
+    dose_id: int,
+    db: Session = Depends(get_db)
+):
+    dose = db.query(
+        medication_dose_models.MedicationDose
+    ).filter(
+        medication_dose_models.MedicationDose.id == dose_id
+    ).first()
+
+    if not dose:
+        raise HTTPException(
+            status_code=404,
+            detail="Medication dose not found"
+        )
+
+    if dose.status != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail="Dose has already been responded to"
+        )
+
+    dose.status = "taken"
+
+    dose.responded_at = datetime.now(
+        ZoneInfo("Asia/Kolkata")
+    ).replace(tzinfo=None)
+
+    db.commit()
+    db.refresh(dose)
+
+    return {
+        "message": "Medication marked as taken",
+        "dose_id": dose.id,
+        "status": dose.status,
+        "responded_at": dose.responded_at
+    }
+
+@app.post("/medication-doses/{dose_id}/skipped")
+def mark_dose_skipped(
+    dose_id: int,
+    db: Session = Depends(get_db)
+):
+    dose = db.query(
+        medication_dose_models.MedicationDose
+    ).filter(
+        medication_dose_models.MedicationDose.id == dose_id
+    ).first()
+
+    if not dose:
+        raise HTTPException(
+            status_code=404,
+            detail="Medication dose not found"
+        )
+
+    if dose.status != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail="Dose has already been responded to"
+        )
+
+    dose.status = "skipped"
+
+    dose.responded_at = datetime.now(
+        ZoneInfo("Asia/Kolkata")
+    ).replace(tzinfo=None)
+
+    db.commit()
+    db.refresh(dose)
+
+    return {
+        "message": "Medication marked as skipped",
+        "dose_id": dose.id,
+        "status": dose.status,
+        "responded_at": dose.responded_at
+    }
+@app.post("/medication-doses/{dose_id}/snooze")
+def snooze_medication_dose(
+    dose_id: int,
+    snooze_minutes: int = 10,
+    db: Session = Depends(get_db)
+):
+    if snooze_minutes < 1 or snooze_minutes > 120:
+        raise HTTPException(
+            status_code=400,
+            detail="Snooze duration must be between 1 and 120 minutes"
+        )
+
+    dose = db.query(
+        medication_dose_models.MedicationDose
+    ).filter(
+        medication_dose_models.MedicationDose.id == dose_id
+    ).first()
+
+    if not dose:
+        raise HTTPException(
+            status_code=404,
+            detail="Medication dose not found"
+        )
+
+    if dose.status != "pending":
+        raise HTTPException(
+            status_code=400,
+            detail="Only pending doses can be snoozed"
+        )
+
+    snooze_time = datetime.now(
+        ZoneInfo("Asia/Kolkata")
+    ).replace(tzinfo=None) + timedelta(minutes=snooze_minutes)
+
+    dose.snoozed_until = snooze_time
+
+    db.commit()
+    db.refresh(dose)
+
+    return {
+        "message": "Medication reminder snoozed successfully",
+        "dose_id": dose.id,
+        "status": dose.status,
+        "snoozed_until": dose.snoozed_until
+    }
+
+
+
