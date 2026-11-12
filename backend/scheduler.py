@@ -1,6 +1,6 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy.exc import IntegrityError
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from database import SessionLocal
@@ -70,6 +70,24 @@ def check_medication_reminders():
                 db.rollback()
                 print("Duplicate dose prevented.")
 
+        # Check for missed medication doses
+        pending_doses = db.query(
+            medication_dose_models.MedicationDose
+        ).filter(
+            medication_dose_models.MedicationDose.status == "pending"
+        ).all()
+
+        for dose in pending_doses:
+            deadline = dose.snoozed_until or dose.scheduled_for
+            deadline = deadline + timedelta(minutes=30)
+
+            if now >= deadline:
+                dose.status = "missed"
+                print(
+                    f"Medication dose missed: Dose {dose.id}"
+                )
+
+        db.commit()
         print("Medication reminder check completed.")
 
     except Exception as error:
