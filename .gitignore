@@ -4,3 +4,11 @@ __pycache__/
 .env
 .DS_Store
 *.db
+
+# Runtime uploaded files
+backend/uploads/
+
+# Local backups and review exports
+backend/*backup*
+backend_source.txt
+medalert_backend_review.zip

@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, UniqueConstraint
-from datetime import datetime
+from time_utils import utcnow_naive
 
 from database import Base
 
@@ -25,13 +25,14 @@ class MedicationDose(Base):
 
     created_at = Column(
         DateTime,
-        default=datetime.utcnow,
+        default=utcnow_naive,
         nullable=False
     )
 
     responded_at = Column(DateTime, nullable=True)
 
     snoozed_until = Column(DateTime, nullable=True)
+    second_reminder_sent_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
         UniqueConstraint(
