@@ -457,13 +457,34 @@ def create_appointment(appointment: schemas.AppointmentCreate, db: Session = Dep
 
 @app.get("/patients/{patient_id}/appointments")
 def get_patient_appointments(patient_id: int, db: Session = Depends(get_db),
-                              user=Depends(auth_routes.get_current_user)):
-    patient_or_404(db, patient_id); require_patient_access(db, user, patient_id, "can_view_appointments")
+                             user=Depends(auth_routes.get_current_user)):
+    patient_or_404(db, patient_id)
+    require_patient_access(db, user, patient_id, "can_view_appointments")
+
     rows = db.query(appointment_models.Appointment).filter(
-        appointment_models.Appointment.patient_id == patient_id).order_by(
-        appointment_models.Appointment.appointment_date, appointment_models.Appointment.appointment_time).all()
-    audit(db, user, patient_id, "view_appointments", "appointment"); db.commit()
-    return rows
+        appointment_models.Appointment.patient_id == patient_id
+    ).order_by(
+        appointment_models.Appointment.appointment_date,
+        appointment_models.Appointment.appointment_time
+    ).all()
+
+    audit(db, user, patient_id, "view_appointments", "appointment")
+    db.commit()
+
+    return [
+        {
+            "id": item.id,
+            "patient_id": item.patient_id,
+            "title": item.title,
+            "appointment_type": item.appointment_type,
+            "appointment_date": item.appointment_date.isoformat() if item.appointment_date else None,
+            "appointment_time": item.appointment_time.isoformat() if item.appointment_time else None,
+            "location": item.location,
+            "notes": item.notes,
+            "status": item.status,
+        }
+        for item in rows
+    ]
 
 
 @app.post("/wellness-checkins")
@@ -485,12 +506,32 @@ def create_wellness_checkin(checkin: schemas.WellnessCheckInCreate, db: Session 
 @app.get("/patients/{patient_id}/wellness-checkins")
 def get_patient_wellness_checkins(patient_id: int, db: Session = Depends(get_db),
                                   user=Depends(auth_routes.get_current_user)):
-    patient_or_404(db, patient_id); require_patient_access(db, user, patient_id, "can_view_wellness")
+    patient_or_404(db, patient_id)
+    require_patient_access(db, user, patient_id, "can_view_wellness")
+
     rows = db.query(wellness_checkin_models.WellnessCheckIn).filter(
-        wellness_checkin_models.WellnessCheckIn.patient_id == patient_id).order_by(
-        wellness_checkin_models.WellnessCheckIn.checkin_date.desc()).all()
-    audit(db, user, patient_id, "view_wellness_checkins", "wellness_checkin"); db.commit()
-    return rows
+        wellness_checkin_models.WellnessCheckIn.patient_id == patient_id
+    ).order_by(
+        wellness_checkin_models.WellnessCheckIn.checkin_date.desc()
+    ).all()
+
+    audit(db, user, patient_id, "view_wellness_checkins", "wellness_checkin")
+    db.commit()
+
+    return [
+        {
+            "id": item.id,
+            "patient_id": item.patient_id,
+            "checkin_date": item.checkin_date.isoformat() if item.checkin_date else None,
+            "due_time": item.due_time.isoformat() if item.due_time else None,
+            "escalation_delay_minutes": item.escalation_delay_minutes,
+            "status": item.status,
+            "checked_in_at": item.checked_in_at.isoformat() if item.checked_in_at else None,
+            "caregiver_alert_sent_at": item.caregiver_alert_sent_at.isoformat() if item.caregiver_alert_sent_at else None,
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+        }
+        for item in rows
+    ]
 
 
 @app.post("/wellness-checkins/{checkin_id}/complete")
