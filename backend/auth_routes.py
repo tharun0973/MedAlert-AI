@@ -1,12 +1,17 @@
+from datetime import timedelta
+import hashlib
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 import auth_models
+import invitation_models
 import models
 import schemas
 from auth import hash_password, verify_password, create_access_token, decode_access_token
 from database import SessionLocal
+from time_utils import utcnow_naive
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -23,34 +28,75 @@ def get_db():
 @router.post("/register")
 def register(data: schemas.RegisterRequest, db: Session = Depends(get_db)):
     email = data.email.strip().lower()
-    if data.role not in {"senior", "caregiver"}:
-        raise HTTPException(status_code=400, detail="Invalid role")
+    raise HTTPException(
+        status_code=410,
+        detail="Use /auth/register/senior for senior registration or /auth/register/caregiver for an invited caregiver.",
+    )
+
+
+@router.post("/register/senior")
+def register_senior(data: schemas.SeniorRegisterRequest, db: Session = Depends(get_db)):
+    email = str(data.email).strip().lower()
+    if db.query(auth_models.UserAccount).filter(auth_models.UserAccount.email == email).first() or \
+            db.query(models.Patient).filter(models.Patient.email == email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    patient = models.Patient(full_name=data.full_name.strip(), email=email)
+    db.add(patient)
+    db.flush()
+    account = auth_models.UserAccount(
+        email=email,
+        password_hash=hash_password(data.password),
+        role="senior",
+        patient_id=patient.id,
+    )
+    db.add(account)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Unable to register this email address")
+    db.refresh(patient)
+    db.refresh(account)
+    return {
+        "message": "Senior account registered successfully",
+        "account_id": account.id,
+        "role": account.role,
+        "patient_id": patient.id,
+    }
+
+
+@router.post("/register/caregiver")
+def register_caregiver(data: schemas.CaregiverInviteRegisterRequest, db: Session = Depends(get_db)):
+    email = str(data.email).strip().lower()
     if db.query(auth_models.UserAccount).filter(auth_models.UserAccount.email == email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    if data.role == "senior":
-        if not data.patient_id or data.caregiver_id is not None:
-            raise HTTPException(status_code=400, detail="A valid patient_id is required")
-        profile = db.query(models.Patient).filter(models.Patient.id == data.patient_id).first()
-    else:
-        if not data.caregiver_id or data.patient_id is not None:
-            raise HTTPException(status_code=400, detail="A valid caregiver_id is required")
-        profile = db.query(models.Caregiver).filter(models.Caregiver.id == data.caregiver_id).first()
+    token_hash = hashlib.sha256(data.invitation_code.encode("utf-8")).hexdigest()
+    invitation = db.query(invitation_models.CaregiverInvitation).filter_by(token_hash=token_hash).first()
+    now = utcnow_naive()
+    if not invitation or invitation.used_at or invitation.expires_at <= now:
+        raise HTTPException(status_code=400, detail="Caregiver invitation is invalid or expired")
 
-    if not profile or profile.email.strip().lower() != email:
-        raise HTTPException(status_code=404, detail="Matching patient or caregiver profile not found")
+    caregiver = db.query(models.Caregiver).filter_by(id=invitation.caregiver_id).first()
+    if not caregiver or caregiver.email.strip().lower() != email:
+        raise HTTPException(status_code=400, detail="Invitation does not match this caregiver email")
 
     account = auth_models.UserAccount(
         email=email,
         password_hash=hash_password(data.password),
-        role=data.role,
-        patient_id=data.patient_id,
-        caregiver_id=data.caregiver_id,
+        role="caregiver",
+        caregiver_id=caregiver.id,
     )
+    invitation.used_at = now
     db.add(account)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Unable to register this caregiver account")
     db.refresh(account)
-    return {"message": "Account registered successfully", "account_id": account.id, "role": account.role}
+    return {"message": "Caregiver account registered successfully", "account_id": account.id, "role": account.role}
 
 
 @router.post("/login", response_model=schemas.TokenResponse)

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database import SessionLocal
 import appointment_models
+import auth_models
 import medication_dose_models
 import medication_models
 import models
@@ -37,6 +38,25 @@ def check_medication_reminders():
                     db.commit()
                 except IntegrityError:
                     db.rollback()
+
+        active_patient_ids = {
+            row.patient_id for row in db.query(auth_models.UserAccount).filter_by(
+                role="senior", is_active=True
+            ).all() if row.patient_id
+        }
+        for patient_id in active_patient_ids:
+            exists = db.query(wellness_checkin_models.WellnessCheckIn).filter_by(
+                patient_id=patient_id, checkin_date=today
+            ).first()
+            if not exists:
+                db.add(wellness_checkin_models.WellnessCheckIn(
+                    patient_id=patient_id,
+                    checkin_date=today,
+                    due_time=time(20, 0),
+                    escalation_delay_minutes=60,
+                    status="pending",
+                ))
+        db.commit()
 
         pending = db.query(medication_dose_models.MedicationDose).filter_by(status="pending").all()
         for dose in pending:

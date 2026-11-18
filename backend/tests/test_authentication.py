@@ -1,4 +1,6 @@
 import os
+import hashlib
+from datetime import timedelta
 
 os.environ.setdefault(
     "MEDALERT_SECRET_KEY",
@@ -25,6 +27,7 @@ def auth_environment(monkeypatch):
     import scheduler
     import models
     import auth_models
+    import invitation_models
     import auth
     import medication_models
     import schedule_models
@@ -92,6 +95,9 @@ def auth_environment(monkeypatch):
                 "caregiver": caregiver,
                 "db_factory": TestSessionLocal,
                 "auth": auth,
+                "auth_models": auth_models,
+                "invitation_models": invitation_models,
+                "models": models,
             }
     finally:
         main.app.dependency_overrides.clear()
@@ -102,51 +108,57 @@ def auth_environment(monkeypatch):
 def test_senior_registration_login_and_jwt(auth_environment):
     env = auth_environment
     client = env["client"]
-    patient = env["patient"]
 
     password = "SeniorTestPassword2026"
 
-    # Registration
+    # Senior profile and account are created atomically.
     response = client.post(
-        "/auth/register",
+        "/auth/register/senior",
         json={
-            "email": "AUTH.PATIENT@example.com",
+            "full_name": "New Authentication Patient",
+            "email": "NEW.SENIOR@example.com",
             "password": password,
-            "role": "senior",
-            "patient_id": patient.id,
         },
     )
     assert response.status_code == 200, response.text
     assert response.json()["role"] == "senior"
+    patient_id = response.json()["patient_id"]
 
     # Confirm password is hashed.
     db = env["db_factory"]()
-    account = db.query(
-        __import__("auth_models").UserAccount
-    ).filter_by(email="auth.patient@example.com").first()
+    account = db.query(env["auth_models"].UserAccount).filter_by(email="new.senior@example.com").first()
 
     assert account is not None
+    assert account.patient_id == patient_id
     assert account.password_hash != password
     assert env["auth"].verify_password(password, account.password_hash)
     db.close()
 
     # Duplicate registration must fail.
     duplicate = client.post(
-        "/auth/register",
+        "/auth/register/senior",
         json={
-            "email": "auth.patient@example.com",
+            "full_name": "Duplicate Patient",
+            "email": "new.senior@example.com",
             "password": password,
-            "role": "senior",
-            "patient_id": patient.id,
         },
     )
     assert duplicate.status_code == 400
+
+    # The legacy public profile-creation and role-based registration routes are disabled.
+    public_profile = client.post("/patients", json={"full_name": "Reserved", "email": "reserved@example.com"})
+    assert public_profile.status_code == 410
+    legacy_registration = client.post("/auth/register", json={
+        "email": "auth.patient@example.com", "password": password, "role": "senior",
+        "patient_id": env["patient"].id,
+    })
+    assert legacy_registration.status_code == 410
 
     # Login uses OAuth2 form fields.
     login = client.post(
         "/auth/login",
         data={
-            "username": "AUTH.PATIENT@example.com",
+            "username": "NEW.SENIOR@example.com",
             "password": password,
         },
     )
@@ -168,12 +180,12 @@ def test_senior_registration_login_and_jwt(auth_environment):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert me.status_code == 200, me.text
-    assert me.json()["email"] == "auth.patient@example.com"
+    assert me.json()["email"] == "new.senior@example.com"
     assert me.json()["role"] == "senior"
 
     # Protected patient endpoint.
     patient_response = client.get(
-        f"/patients/{patient.id}",
+        f"/patients/{patient_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert patient_response.status_code == 200, patient_response.text
@@ -182,7 +194,7 @@ def test_senior_registration_login_and_jwt(auth_environment):
     wrong_password = client.post(
         "/auth/login",
         data={
-            "username": "auth.patient@example.com",
+            "username": "new.senior@example.com",
             "password": "IncorrectPassword2026",
         },
     )
@@ -217,18 +229,40 @@ def test_caregiver_registration_and_login(auth_environment):
     caregiver = env["caregiver"]
 
     password = "CaregiverTestPassword2026"
+    invitation_code = "caregiver-invitation-code-for-auth-test-2026"
+    db = env["db_factory"]()
+    inviter = env["auth_models"].UserAccount(
+        email="inviter@example.com", password_hash="test-hash", role="senior",
+        patient_id=env["patient"].id,
+    )
+    db.add(inviter)
+    db.flush()
+    invitation = env["invitation_models"].CaregiverInvitation(
+        caregiver_id=caregiver.id,
+        token_hash=hashlib.sha256(invitation_code.encode("utf-8")).hexdigest(),
+        created_by_user_id=inviter.id,
+        expires_at=__import__("time_utils").utcnow_naive() + timedelta(days=7),
+    )
+    db.add(invitation)
+    db.commit()
+    db.close()
 
     registration = client.post(
-        "/auth/register",
+        "/auth/register/caregiver",
         json={
+            "invitation_code": invitation_code,
             "email": "auth.caregiver@example.com",
             "password": password,
-            "role": "caregiver",
-            "caregiver_id": caregiver.id,
         },
     )
     assert registration.status_code == 200, registration.text
     assert registration.json()["role"] == "caregiver"
+    reused = client.post("/auth/register/caregiver", json={
+        "invitation_code": invitation_code,
+        "email": "auth.caregiver@example.com",
+        "password": password,
+    })
+    assert reused.status_code == 400
 
     login = client.post(
         "/auth/login",

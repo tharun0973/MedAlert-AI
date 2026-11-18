@@ -10,8 +10,19 @@ class PatientCreate(BaseModel):
 class MedicationCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     dosage: str
-    frequency: str
+    frequency: str = Field(pattern="^(Once daily|Twice daily|Three times daily|Custom daily schedule)$")
     reminder_time: time | None = None
+    reminder_times: list[time] | None = None
+    is_critical: bool = False
+    grace_period_minutes: int = Field(default=30, ge=1, le=1440)
+    food_instructions: str | None = None
+
+
+class MedicationUpdate(BaseModel):
+    name: str
+    dosage: str
+    frequency: str = Field(pattern="^(Once daily|Twice daily|Three times daily|Custom daily schedule)$")
+    reminder_times: list[time] = Field(min_length=1, max_length=12)
     is_critical: bool = False
     grace_period_minutes: int = Field(default=30, ge=1, le=1440)
     food_instructions: str | None = None
@@ -33,6 +44,10 @@ class MedicationRefillCreate(BaseModel):
     refill_date: date
     pharmacy_name: str | None = None
     pharmacy_phone: str | None = None
+
+
+class RefillStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(pending|completed)$")
 
 
 class AppointmentCreate(BaseModel):
@@ -86,6 +101,18 @@ class RegisterRequest(BaseModel):
     role: str
     patient_id: int | None = None
     caregiver_id: int | None = None
+
+
+class SeniorRegisterRequest(BaseModel):
+    full_name: str = Field(min_length=1, max_length=150)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+
+
+class CaregiverInviteRegisterRequest(BaseModel):
+    invitation_code: str = Field(min_length=32, max_length=128)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
 
 
 class LoginRequest(BaseModel):
